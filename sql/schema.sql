@@ -1,0 +1,20 @@
+CREATE TABLE transactions (
+    transaction_id VARCHAR PRIMARY KEY,
+    timestamp TIMESTAMP,
+    sender_account VARCHAR,
+    receiver_account VARCHAR,
+    amount NUMERIC,
+    transaction_type VARCHAR,
+    merchant_category VARCHAR,
+    location VARCHAR,
+    device_used VARCHAR,
+    is_fraud BOOLEAN,
+    fraud_type VARCHAR,
+    time_since_last_transaction NUMERIC,
+    spending_deviation_score NUMERIC,
+    velocity_score NUMERIC,
+    geo_anomaly_score NUMERIC,
+    payment_channel VARCHAR,
+    ip_address VARCHAR,
+    device_hash VARCHAR
+);
