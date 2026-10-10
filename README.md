@@ -1,3 +1,11 @@
+> ⚠️ **Status: wyniki raportowane w tym README są nieważne**
+>
+> Audyt projektu wykazał, że metryki podane niżej zostały policzone na
+> niereprezentatywnym wycinku danych, a sygnał wykrywany przez model pochodzi
+> z artefaktu generatora danych, nie z wzorców nadużyć. Szczegóły w sekcji
+> [Weryfikacja wyników](#weryfikacja-wynikow). Przeliczenie na pełnym zbiorze — w toku.
+
+
 # Detekcja nadużyć finansowych w danych transakcyjnych (fraud detection)
 
 Projekt prezentuje kompletny pipeline analizy nadużyć finansowych na syntetycznym zbiorze transakcji finansowych – od eksploracji danych (EDA), przez inżynierię cech, po modelowanie klasyfikacyjne z uwzględnieniem silnej nierównowagi klas.
@@ -144,22 +152,97 @@ Przy wysokim koszcie FN (np. 50–100):
 
 ---
 
-### Uwagi o przeuczeniu (różnica między 100k a 1M)
+## Weryfikacja wyników
 
-Pierwsze eksperymenty były prowadzone na próbce **100 000** wierszy:
+Raportowane w tym README metryki (RandomForest ROC AUC ≈ 0.80, PR AUC ≈ 0.043, KS ≈ 0.61) są **nieważne**. Weryfikacja na pełnym zbiorze 5 000 000 wierszy wykazała trzy niezależne problemy.
 
-- RandomForest na 100k:
-  - ROC AUC ≈ 0.97–0.98,
-  - KS ≈ 0.90–0.95.
+**1. Błąd próbkowania.** `nrows=1000000` bierze pierwszy milion wierszy pliku, a nie losową próbkę. Plik nie jest losowo uporządkowany: fraud rate rośnie monotonicznie z 1.744% w pierwszym bloku do 4.353% w ostatnim, przy 3.591% dla całości. Każda metryka w tym README dotyczy wycinka o ponad dwukrotnie niższym fraud rate niż zbiór.
 
-Tak wysokie wartości – przy stosunkowo małej próbce i nierównowadze klas – wskazywały na przeuczenie.
+**2. Artefakt w danych.** Kolumna `time_since_last_transaction` ma 896 513 braków i wśród tych wierszy nie ma **ani jednego** fraudu. Sam wskaźnik „czy wartość jest obecna" niesie większość sygnału, który model raportuje jako swoją skuteczność: po usunięciu tej jednej kolumny ROC AUC spada z 0.8011 do 0.5086, a KS z 0.610 do 0.016. Pozostałe cechy mają AUC jednoczynnikowe w przedziale 0.485–0.508, czyli są nieinformatywne.
 
-Po przejściu na zbiór **1 000 000**:
+**3. Wycieki w kodzie.** `merchant_risk_score` liczony na całych danych przed podziałem train/test, podział losowy zamiast chronologicznego na danych uporządkowanych w czasie, próg decyzyjny dobierany na zbiorze testowym zamiast walidacyjnego.
 
-- metryki ustabilizowały się na bardziej realistycznym poziomie (ROC AUC ≈ 0.80, KS ≈ 0.61),
-- dodatkowo zwiększono `min_samples_leaf` w modelu RandomForest, aby wymusić bardziej „gładkie” drzewa decyzyjne i lepsze uogólnienie.
+Pierwotne wyjaśnienie w tym README, że spadek metryk między próbką 100k a 1M wynikał z przeuczenia, było błędne. Metryki na zbiorze testowym nie spadają od dołożenia danych treningowych; przyczyną była zmiana składu próbki, czyli ten sam błąd próbkowania.
 
-Informacja o wcześniejszych wynikach została pozostawiona, aby pokazać proces dochodzenia do konfiguracji modelu adekwatnej do skali i charakterystyki danych.
+<details>
+<summary><b>Szczegóły: liczby, tabele, metodyka</b></summary>
+
+<br>
+
+Liczby poniżej pochodzą z jednego przebiegu na pełnym zbiorze 5 000 000 wierszy, bez próbkowania. Wyjątki są oznaczone w miejscu.
+
+### 1. Błąd próbkowania
+
+`src/config.py` ustawia `DEBUG_SMALL_DATA = True` i `DEBUG_NROWS = 1000000`, a `src/load_data.py` przekazuje tę wartość jako `pd.read_csv(path, nrows=DEBUG_NROWS)`.
+
+Fraud rate w kolejnych blokach po milion wierszy:
+
+| Blok | 1 | 2 | 3 | 4 | 5 |
+|------|---|---|---|---|---|
+| fraud rate | 1.744% | 3.501% | 4.094% | 4.264% | 4.353% |
+
+Raportowane w tym README „fraud rate ≈ 0.0174" to dokładnie wartość pierwszego bloku, czyli własność początku pliku, a nie zbioru danych.
+
+### 2. Artefakt w danych
+
+Rozkład fraudów względem brakującej wartości `time_since_last_transaction` (pełne 5M):
+
+| `time_since_last_transaction` | wierszy | fraudów | fraud rate |
+|-------------------------------|---------|---------|------------|
+| obecna | 4 103 487 | 179 553 | 4.376% |
+| brakująca | 896 513 | **0** | **0.000%** |
+
+Zero fraudów wśród 896 tysięcy wierszy to twarda reguła generatora danych, nie zmienność statystyczna.
+
+Kolumna jest przy tym bezużyteczna jako wartość liczbowa: 2 051 500 z 4 103 487 obecnych wartości (49.99%) jest ujemnych, co dla „czasu od ostatniej transakcji" jest semantycznie niemożliwe i wskazuje na symetryczny szum wokół zera. Informacja nie siedzi w wartości, tylko w jej obecności.
+
+**Siła artefaktu zależy od wycinka.** Dla predyktora binarnego, w którym każdy pozytyw ma tę samą wartość, zachodzi `AUC = 1 − 0.5p`, gdzie `p` to udział negatywów również ją niosących:
+
+| Wycinek | wierszy z brakiem | p | AUC wskaźnika obecności |
+|---------|-------------------|---|-------------------------|
+| pierwszy 1M | 603 496 | 0.386 | **0.807** |
+| pełne 5M | 896 513 | 0.814 | **0.593** |
+
+Na pełnym zbiorze wskaźnik braku dał `roc_auc_score = 0.407`; po odwróceniu orientacji (fraudy występują wyłącznie w grupie z wartością obecną) jest to 0.593. Na pierwszym milionie wierszy sam wskaźnik obecności osiąga AUC niemal równe pełnemu modelowi raportowanemu w tym README.
+
+**Test ablacyjny**, usunięcie kolumny z macierzy cech:
+
+| Metryka | z kolumną | bez kolumny |
+|---------|-----------|-------------|
+| ROC AUC | 0.8011 | 0.5086 |
+| KS | 0.610 | 0.016 |
+
+Wynik policzony na pierwszym milionie wierszy, przy podziale chronologicznym i modelu gradient boosting, czyli na konfiguracji innej niż `scripts/run_training.py` w tym repozytorium. Na pełnym pliku różnica będzie mniejsza, proporcjonalnie do słabszego artefaktu. Przeliczenie i publikacja skryptu w toku.
+
+### 3. Wycieki w kodzie
+
+- `add_merchant_risk_score` w `src/features.py` liczy fraud rate per `merchant_category` na całych danych, przed podziałem train/test. Etykieta ze zbioru testowego trafia więc do cechy używanej do predykcji na tym samym zbiorze. Poprawna wersja to kodowanie dopasowane wyłącznie na foldzie treningowym.
+- `scripts/run_training.py` używa `train_test_split(..., stratify=y)`, czyli podziału losowego, na danych uporządkowanych w czasie. Przy transakcjach wymagany jest podział chronologiczny; losowy pozwala modelowi uczyć się z przyszłości.
+- Próg decyzyjny jest wybierany na zbiorze testowym, a nie walidacyjnym, więc metryki przy „optymalnym progu" są optymistyczne.
+
+### Czego nie wykrył test permutacyjny
+
+Test z przetasowanymi etykietami przeszedł poprawnie (0.4881 ± 0.0155, 5 ziaren), co oznacza, że pipeline nie ma klasycznego wycieku etykiety. Artefaktu jednak nie wykrył i nie mógł: permutacja niszczy dokładnie tę relację, na której artefakt się opiera.
+
+Wykryły go dopiero skan AUC jednoczynnikowego dla poszczególnych cech, porównanie pojedynczej cechy z pełnym modelem oraz test ablacyjny. Testy typu *„czy w ogóle jest sygnał"* nie zastępują testów typu *„skąd pochodzi sygnał"*.
+
+Osobna uwaga metodyczna: pierwsza wartość AUC wskaźnika obecności (0.807) pochodziła z wycinka head-of-file i została zgłoszona jako wynik dla całego zbioru. Pomiar na pełnym pliku dał 0.593. Obie liczby są poprawne, tylko na różnych zbiorach. Każde porównanie cechy z modelem wymaga podania wycinka i orientacji.
+
+### Status
+
+Kod i wykresy w tym repozytorium pochodzą sprzed weryfikacji. Wykresy w `reports/figures/` oraz metryki w sekcjach „Modelowanie" i „Przykładowe wyniki" dotyczą pierwszego miliona wierszy i cechy obciążonej artefaktem.
+
+Do przeliczenia na jednym udokumentowanym zbiorze:
+
+- zmiana `nrows=` na losowanie z `random_state`, albo przejście na pełne 5M,
+- metryki obu modeli, ablacja, AUC jednoczynnikowe wszystkich cech łącznie z kodowaniem one-hot,
+- `merchant_risk_score` dopasowywany tylko na foldzie treningowym,
+- podział chronologiczny i wybór progu na zbiorze walidacyjnym,
+- regeneracja wszystkich wykresów.
+
+</details>
+
+
 
 ---
 ## Przykładowe wizualizacje
