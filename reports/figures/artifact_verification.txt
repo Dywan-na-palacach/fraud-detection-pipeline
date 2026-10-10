@@ -1,0 +1,24 @@
+=== missingness vs fraud ===
+                                 mean     sum    count
+time_since_last_transaction                           
+False                        0.043756  179553  4103487
+True                         0.000000       0   896513
+
+=== overall fraud rate ===
+0.0359106
+
+=== impossible negative values ===
+0.4102662
+
+=== fraud rate drift across file (5 chunks) ===
+0    0.017442
+1    0.035005
+2    0.040938
+3    0.042642
+4    0.043526
+Name: is_fraud, dtype: float64
+
+=== missingness AUC ===
+0.40700934996277316
+
+Process finished with exit code 0
